@@ -1,16 +1,19 @@
 (in-package :nibbles-streams)
 
 (defclass nibbles-stream (tgs:fundamental-binary-stream)
-  ((element-type :initarg  :element-type
-                 :accessor nibbles-stream-element-type)
-   (endianness   :initarg  :endianness
-                 :initform :little
-                 :accessor nibbles-stream-endianness
-                 :type     (member :big :little))
-   (stream       :initarg  :stream
-                 :initform (error "Specify underlying stream")
-                 :reader   nibbles-stream-stream
-                 :type     stream))
+  ((element-type :initarg       :element-type
+                 :accessor      nibbles-stream-element-type
+                 :documentation "Element type of nibble-stream. Setfable.")
+   (endianness   :initarg       :endianness
+                 :initform      :little
+                 :accessor      nibbles-stream-endianness
+                 :type          (member :big :little)
+                 :documentation "Endianness of the stream. Can be :LITTLE or :BIG")
+   (stream       :initarg       :stream
+                 :initform      (error "Specify underlying stream")
+                 :reader        nibbles-stream-stream
+                 :type          stream
+                 :documentation "Underlying stream. Must be specified at creation time."))
   (:documentation "Generic nibbles stream. Not to be instantiated."))
 
 (defclass nibbles-output-stream (nibbles-stream
@@ -21,7 +24,7 @@
 (defclass nibbles-input-stream (nibbles-stream
                                 tgs:fundamental-binary-input-stream)
   ()
-  (:documentation "Output nibbles stream."))
+  (:documentation "Input nibbles stream."))
 
 (define-condition nibbles-stream-error (simple-error)
   ()
@@ -47,23 +50,32 @@
              (symbol-function
               (intern name (find-package :nibbles)))))
       (loop for signedness in '(unsigned-byte signed-byte) do
-            (loop for size in '(16 32 64) do
-                  (loop for endianness in '(:big :little) do
-                        (flet ((type-spec ()
-                                 (format nil "~a~d/~a"
-                                         (ecase signedness
-                                           (unsigned-byte "UB")
-                                           (signed-byte   "SB"))
-                                         size
-                                         (ecase endianness
-                                           (:little "LE")
-                                           (:big    "BE")))))
-                          (push (db-entry endianness (list signedness size)
-                                          (nibbles-fn (format nil "READ-~a" (type-spec)))
-                                          (nibbles-fn (format nil "READ-~a-INTO-SEQUENCE" (type-spec)))
-                                          (nibbles-fn (format nil "WRITE-~a" (type-spec)))
-                                          (nibbles-fn (format nil "WRITE-~a-SEQUENCE" (type-spec))))
-                                functions))))))
+           (loop for size in '(16 32 64) do
+                (loop for endianness in '(:big :little) do
+                     (let ((type-spec
+                            (format nil "~a~d/~a"
+                                    (ecase signedness
+                                      (unsigned-byte "UB")
+                                      (signed-byte   "SB"))
+                                    size
+                                    (ecase endianness
+                                      (:little "LE")
+                                      (:big    "BE")))))
+                       (push (db-entry endianness (list signedness size)
+                                       (nibbles-fn (format nil "READ-~a" type-spec))
+                                       ;; KLUDGE: READ-X-INTO-SEQUENCE returns the sequence itself
+                                       ;; rather than the first unmodified position so we need to
+                                       ;; create a small wrapper
+                                       (flet ((read-sequence-wrapper (seq stream &key (start 0) end)
+                                                (funcall
+                                                 (nibbles-fn
+                                                  (format nil "READ-~a-INTO-SEQUENCE" type-spec))
+                                                 seq stream :start start :end end)
+                                                (or end (length seq))))
+                                         #'read-sequence-wrapper)
+                                       (nibbles-fn (format nil "WRITE-~a" type-spec))
+                                       (nibbles-fn (format nil "WRITE-~a-SEQUENCE" type-spec)))
+                             functions))))))
     functions))
 
 (defparameter *function-db*
