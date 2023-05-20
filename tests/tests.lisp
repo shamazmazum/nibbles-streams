@@ -120,6 +120,7 @@
       ;; Others?
       )))
 
+#+sbcl
 (test element-type-checks
   (flexi:with-output-to-sequence (output)
     (let ((stream (make-instance 'ns:nibbles-output-stream
