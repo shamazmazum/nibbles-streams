@@ -91,9 +91,9 @@
            (db-entry :little '(signed-byte 8)
                      #'read-sb8  #'read-sb8-sequence
                      #'write-sb8 #'write-sb8-sequence)
-           (db-entry :big    '(unsigned-byte 8)
-                     #'read-byte  #'read-sequence
-                     #'write-byte #'write-sequence))))
+           (db-entry :big    '(signed-byte 8)
+                     #'read-sb8  #'read-sb8-sequence
+                     #'write-sb8 #'write-sb8-sequence))))
 
 ;; Hacks with types
 (defun typesequalp (t1 t2)
