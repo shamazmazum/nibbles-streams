@@ -16,14 +16,25 @@
                  :documentation "Underlying stream. Must be specified at creation time."))
   (:documentation "Generic nibbles stream. Not to be instantiated."))
 
-(defclass nibbles-output-stream (nibbles-stream
-                                 tgs:fundamental-binary-output-stream)
-  ()
+(defclass nibbles-output-stream (nibbles-stream tgs:fundamental-binary-output-stream)
+  ((byte-writer     :type          function
+                    :accessor      nibbles-stream-byte-writer
+                    :documentation "Function which is called to write a byte to the stream")
+   (sequence-writer :type          function
+                    :accessor      nibbles-stream-sequence-writer
+                    :documentation
+                    "Function which is called to write a sequence of bytes to the stream"))
   (:documentation "Output nibbles stream."))
 
 (defclass nibbles-input-stream (nibbles-stream
                                 tgs:fundamental-binary-input-stream)
-  ()
+  ((byte-reader     :type          function
+                    :accessor      nibbles-stream-byte-reader
+                    :documentation "Function which is called to read a byte from the stream")
+   (sequence-reader :type          function
+                    :accessor      nibbles-stream-sequence-reader
+                    :documentation
+                    "Function which is called to read a sequence of bytes from the stream"))
   (:documentation "Input nibbles stream."))
 
 (define-condition nibbles-stream-error (simple-error)
@@ -34,7 +45,12 @@
                                        &key element-type &allow-other-keys)
   (setf (nibbles-stream-element-type nibbles-stream)
         (or element-type (stream-element-type
-                          (nibbles-stream-stream nibbles-stream)))))
+                          (nibbles-stream-stream nibbles-stream))))
+  (update-functions nibbles-stream))
+
+(defgeneric update-functions (stream)
+  (:documentation "Update reader or writer functions after a change of element-type or
+endiannes."))
 
 (sera:defconstructor db-entry
   (endianness      (member :big :little))
@@ -63,18 +79,21 @@
                                       (:big    "BE")))))
                        (push (db-entry endianness (list signedness size)
                                        (nibbles-fn (format nil "READ-~a" type-spec))
-                                       ;; KLUDGE: READ-X-INTO-SEQUENCE returns the sequence itself
-                                       ;; rather than the first unmodified position so we need to
-                                       ;; create a small wrapper
-                                       (flet ((read-sequence-wrapper (seq stream &key (start 0) end)
+                                       ;; KLUDGE: READ-X-INTO-SEQUENCE returns the
+                                       ;; sequence itself rather than the first unmodified
+                                       ;; position so we need to create a small wrapper
+                                       (flet ((read-sequence-wrapper (seq stream &key
+                                                                          (start 0) end)
                                                 (funcall
                                                  (nibbles-fn
-                                                  (format nil "READ-~a-INTO-SEQUENCE" type-spec))
+                                                  (format nil "READ-~a-INTO-SEQUENCE"
+                                                          type-spec))
                                                  seq stream :start start :end end)
                                                 (or end (length seq))))
                                          #'read-sequence-wrapper)
                                        (nibbles-fn (format nil "WRITE-~a" type-spec))
-                                       (nibbles-fn (format nil "WRITE-~a-SEQUENCE" type-spec)))
+                                       (nibbles-fn (format nil "WRITE-~a-SEQUENCE"
+                                                           type-spec)))
                              functions))))))
     functions))
 
@@ -107,6 +126,24 @@
           (eq          (db-entry-endianness   entry) endianness)))
    *function-db*))
 
+(defmethod update-functions ((stream nibbles-output-stream))
+  (let ((entry (find-entry
+                (nibbles-stream-endianness stream)
+                (stream-element-type       stream))))
+    (setf (nibbles-stream-byte-writer     stream)
+          (db-entry-byte-writer     entry)
+          (nibbles-stream-sequence-writer stream)
+          (db-entry-sequence-writer entry))))
+
+(defmethod update-functions ((stream nibbles-input-stream))
+  (let ((entry (find-entry
+                (nibbles-stream-endianness stream)
+                (stream-element-type       stream))))
+    (setf (nibbles-stream-byte-reader     stream)
+          (db-entry-byte-reader     entry)
+          (nibbles-stream-sequence-reader stream)
+          (db-entry-sequence-reader entry))))
+
 (defmethod tgs:stream-force-output ((stream nibbles-output-stream))
   (force-output (nibbles-stream-stream stream)))
 
@@ -128,6 +165,10 @@
            :format-control "Unsupported endianness-type pair: ~a + ~a"
            :format-arguments (list (nibbles-stream-endianness stream) type))))
 
+(defmethod (setf nibbles-stream-element-type) :after (type (stream nibbles-stream))
+  (declare (ignore type))
+  (update-functions stream))
+
 (defmethod (setf nibbles-stream-endianness) :before (endianness (stream nibbles-stream))
   (declare (type (member :little :big) endianness))
   (unless (find-entry endianness (stream-element-type stream))
@@ -135,40 +176,26 @@
            :format-control "Unsupported endianness-type pair: ~a + ~a"
            :format-arguments (list endianness (stream-element-type stream)))))
 
+(defmethod (setf nibbles-stream-endianness) :after (endianness (stream nibbles-stream))
+  (declare (ignore endianness))
+  (update-functions stream))
+
 (defmethod tgs:stream-read-byte ((stream nibbles-input-stream))
-  (let ((function
-         (db-entry-byte-reader
-          (find-entry
-           (nibbles-stream-endianness stream)
-           (stream-element-type       stream)))))
-    (funcall function (nibbles-stream-stream stream))))
+  (funcall (nibbles-stream-byte-reader stream)
+           (nibbles-stream-stream stream)))
 
 (defmethod tgs:stream-write-byte ((stream nibbles-output-stream) byte)
-  (let ((function
-         (db-entry-byte-writer
-          (find-entry
-           (nibbles-stream-endianness stream)
-           (stream-element-type       stream)))))
-    (funcall function byte (nibbles-stream-stream stream))))
+  (funcall (nibbles-stream-byte-writer stream)
+           byte (nibbles-stream-stream stream)))
 
 (defmethod tgs:stream-read-sequence ((stream nibbles-input-stream)
                                      sequence start end &key &allow-other-keys)
-  (let ((function
-         (db-entry-sequence-reader
-          (find-entry
-           (nibbles-stream-endianness stream)
-           (stream-element-type       stream)))))
-    (funcall function
-             sequence (nibbles-stream-stream stream)
-             :start (or start 0) :end end)))
+  (funcall (nibbles-stream-sequence-reader stream)
+           sequence (nibbles-stream-stream stream)
+           :start (or start 0) :end end))
 
 (defmethod tgs:stream-write-sequence ((stream nibbles-input-stream)
                                       sequence start end &key &allow-other-keys)
-  (let ((function
-         (db-entry-sequence-writer
-          (find-entry
-           (nibbles-stream-endianness stream)
-           (stream-element-type       stream)))))
-    (funcall function
-             sequence (nibbles-stream-stream stream)
-             :start (or start 0) :end end)))
+  (funcall (nibbles-stream-sequence-writer stream)
+           sequence (nibbles-stream-stream stream)
+           :start (or start 0) :end end))
