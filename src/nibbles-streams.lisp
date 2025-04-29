@@ -66,7 +66,7 @@ endiannes."))
              (symbol-function
               (intern name (find-package :nibbles)))))
       (loop for signedness in '(unsigned-byte signed-byte) do
-           (loop for size in '(16 32 64) do
+           (loop for size in '(16 24 32 64) do
                 (loop for endianness in '(:big :little) do
                      (let ((type-spec
                             (format nil "~a~d/~a"
